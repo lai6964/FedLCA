@@ -796,7 +796,9 @@ def run_experiment(args):
             replace=False,
         ).tolist()
 
-        old_global_params = copy.deepcopy(global_params)
+        old_global_params = None
+        if args.method != "fedavg":
+            old_global_params = copy.deepcopy(global_params)
 
         # ====================================================
         # 服务器候选层选择
@@ -864,31 +866,51 @@ def run_experiment(args):
                 downloaded = sum(group_param_counts[g] for g in candidate_layers)
             round_download_params += downloaded
 
-            temp_model = model_fn().to(device)
-            load_param_dict(temp_model, global_params)
-
-            print("computing importance")
-            local_importance = compute_layer_importance(
-                temp_model,
-                loader,
-                device,
-                layer_groups,
-            )
-
-            print("computing consistency")
-            local_consistency = estimate_local_consistency(
-                local_importance=local_importance,
-                server_consistency=consistency_stats,
-                candidate_layers=candidate_layers,
-            )
-
             if args.method == "fedavg":
+                local_importance = {}
+                local_consistency = {}
                 selected_layers = groups
 
             elif args.method in ["server_only", "wo_client_adaptive"]:
+                temp_model = model_fn().to(device)
+                load_param_dict(temp_model, global_params)
+
+                print("computing importance")
+                local_importance = compute_layer_importance(
+                    temp_model,
+                    loader,
+                    device,
+                    layer_groups,
+                )
+
+                print("computing consistency")
+                local_consistency = estimate_local_consistency(
+                    local_importance=local_importance,
+                    server_consistency=consistency_stats,
+                    candidate_layers=candidate_layers,
+                )
+
                 selected_layers = candidate_layers
 
             else:
+                temp_model = model_fn().to(device)
+                load_param_dict(temp_model, global_params)
+
+                print("computing importance")
+                local_importance = compute_layer_importance(
+                    temp_model,
+                    loader,
+                    device,
+                    layer_groups,
+                )
+
+                print("computing consistency")
+                local_consistency = estimate_local_consistency(
+                    local_importance=local_importance,
+                    server_consistency=consistency_stats,
+                    candidate_layers=candidate_layers,
+                )
+
                 res = resources[cid]
 
                 selected_layers, used_budget = client_select_layers(
@@ -952,16 +974,17 @@ def run_experiment(args):
         # ====================================================
         # 更新服务器层级统计量
         # ====================================================
-        importance_stats, consistency_stats = update_server_statistics(
-            old_global=old_global_params,
-            new_global=global_params,
-            client_updates=client_updates,
-            layer_groups=layer_groups,
-            importance_uploads=importance_uploads,
-            importance_stats=importance_stats,
-            consistency_stats=consistency_stats,
-            beta=args.stat_beta,
-        )
+        if args.method != "fedavg":
+            importance_stats, consistency_stats = update_server_statistics(
+                old_global=old_global_params,
+                new_global=global_params,
+                client_updates=client_updates,
+                layer_groups=layer_groups,
+                importance_uploads=importance_uploads,
+                importance_stats=importance_stats,
+                consistency_stats=consistency_stats,
+                beta=args.stat_beta,
+            )
 
         # ====================================================
         # Evaluation
