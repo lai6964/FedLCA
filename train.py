@@ -60,7 +60,41 @@ def ema_update(old, new, beta=0.9):
 # 2. Model
 # ============================================================
 
-def build_model(num_classes=10):
+class CifarCNN(nn.Module):
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=5, padding=2),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        self.fc1 = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64 * 8 * 8, 512),
+            nn.ReLU(inplace=True),
+        )
+        self.fc2 = nn.Linear(512, num_classes)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.fc1(x)
+        return self.fc2(x)
+
+
+def build_model(num_classes=10, model_name="cnn"):
+    model_name = model_name.lower()
+    if model_name == "cnn":
+        return CifarCNN(num_classes=num_classes)
+
+    if model_name != "resnet18":
+        raise ValueError(f"Unsupported model: {model_name}")
+
     model = torchvision.models.resnet18(num_classes=num_classes)
 
     # 修改 ResNet-18 以适应 CIFAR 输入
@@ -79,7 +113,7 @@ def get_layer_groups(model):
     """
     groups = defaultdict(list)
 
-    for name, param in model.named_parameters():
+    for name in model.state_dict().keys():
         if name.startswith("conv1") or name.startswith("bn1"):
             groups["stem"].append(name)
         elif name.startswith("layer1"):
@@ -110,7 +144,7 @@ def get_group_tensors(param_dict, group_names, layer_groups):
     tensors = []
     for g in group_names:
         for name in layer_groups[g]:
-            if name in param_dict:
+            if name in param_dict and torch.is_floating_point(param_dict[name]):
                 tensors.append(param_dict[name])
     return tensors
 
@@ -118,7 +152,7 @@ def get_group_tensors(param_dict, group_names, layer_groups):
 def get_single_group_tensor(param_dict, group, layer_groups):
     tensors = []
     for name in layer_groups[group]:
-        if name in param_dict:
+        if name in param_dict and torch.is_floating_point(param_dict[name]):
             tensors.append(param_dict[name])
     return flatten_tensors(tensors)
 
@@ -134,13 +168,13 @@ def set_trainable_layers(model, selected_groups, layer_groups):
 
 def count_group_params(model, layer_groups):
     param_counts = {}
-    named_params = dict(model.named_parameters())
+    state = model.state_dict()
 
     for g, names in layer_groups.items():
         total = 0
         for name in names:
-            if name in named_params:
-                total += named_params[name].numel()
+            if name in state and torch.is_floating_point(state[name]):
+                total += state[name].numel()
         param_counts[g] = total
 
     return param_counts
@@ -150,7 +184,7 @@ def count_group_params(model, layer_groups):
 # 3. Dataset and Partition
 # ============================================================
 
-def load_dataset(dataset_name, data_root="../Dataset"):
+def load_dataset(dataset_name, data_root="./data", download=False):
     dataset_name = dataset_name.lower()
 
     if dataset_name == "cifar10":
@@ -173,10 +207,10 @@ def load_dataset(dataset_name, data_root="../Dataset"):
         ])
 
         train_set = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=True, transform=train_transform
+            root=data_root, train=True, download=download, transform=train_transform
         )
         test_set = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=True, transform=test_transform
+            root=data_root, train=False, download=download, transform=test_transform
         )
 
     elif dataset_name == "cifar100":
@@ -199,10 +233,10 @@ def load_dataset(dataset_name, data_root="../Dataset"):
         ])
 
         train_set = torchvision.datasets.CIFAR100(
-            root=data_root, train=True, download=True, transform=train_transform
+            root=data_root, train=True, download=download, transform=train_transform
         )
         test_set = torchvision.datasets.CIFAR100(
-            root=data_root, train=False, download=True, transform=test_transform
+            root=data_root, train=False, download=download, transform=test_transform
         )
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
@@ -308,7 +342,7 @@ def compute_layer_importance(model, loader, device, layer_groups):
 
 def train_local(
     global_params,
-    model_fn,
+    model,
     loader,
     selected_layers,
     layer_groups,
@@ -322,7 +356,6 @@ def train_local(
     客户端本地训练。
     只训练 selected_layers，其余层冻结。
     """
-    model = model_fn().to(device)
     load_param_dict(model, global_params)
 
     set_trainable_layers(model, selected_layers, layer_groups)
@@ -357,7 +390,7 @@ def train_local(
     updates = {}
     for g in selected_layers:
         for name in layer_groups[g]:
-            if name in new_params:
+            if name in new_params and torch.is_floating_point(new_params[name]):
                 updates[name] = new_params[name] - global_params[name]
 
     avg_loss = total_loss / max(total_num, 1)
@@ -524,6 +557,8 @@ def aggregate_layer_updates(
 
         for name in names:
             if name not in new_global:
+                continue
+            if not torch.is_floating_point(new_global[name]):
                 continue
 
             agg_update = torch.zeros_like(new_global[name])
@@ -725,7 +760,11 @@ def run_experiment(args):
     device = get_device()
     print(device)
 
-    train_set, test_set, num_classes = load_dataset(args.dataset, args.data_root)
+    train_set, test_set, num_classes = load_dataset(
+        args.dataset,
+        args.data_root,
+        download=args.download_data,
+    )
 
     client_indices = dirichlet_partition(
         dataset=train_set,
@@ -746,13 +785,17 @@ def run_experiment(args):
         num_workers=args.num_workers,
     )
 
-    model_fn = lambda: build_model(num_classes=num_classes)
+    model_fn = lambda: build_model(
+        num_classes=num_classes,
+        model_name=args.model,
+    )
 
     global_model = model_fn()
     layer_groups = get_layer_groups(global_model)
     group_param_counts = count_group_params(global_model, layer_groups)
 
     global_params = get_param_dict(global_model)
+    client_models = [model_fn().to(device) for _ in range(args.num_clients)]
 
     resources = generate_client_resources(
         args.num_clients,
@@ -854,8 +897,9 @@ def run_experiment(args):
         # 客户端本地训练
         # ====================================================
         for cid in selected_clients:
-            print("begin clint {}".format(cid))
+            # print("begin clint {}".format(cid))
             loader = client_loaders[cid]
+            local_model = client_models[cid]
             num_samples = len(client_indices[cid])
             client_weights.append(num_samples)
 
@@ -872,18 +916,17 @@ def run_experiment(args):
                 selected_layers = groups
 
             elif args.method in ["server_only", "wo_client_adaptive"]:
-                temp_model = model_fn().to(device)
-                load_param_dict(temp_model, global_params)
+                load_param_dict(local_model, global_params)
 
-                print("computing importance")
+                # print("computing importance")
                 local_importance = compute_layer_importance(
-                    temp_model,
+                    local_model,
                     loader,
                     device,
                     layer_groups,
                 )
 
-                print("computing consistency")
+                # print("computing consistency")
                 local_consistency = estimate_local_consistency(
                     local_importance=local_importance,
                     server_consistency=consistency_stats,
@@ -893,18 +936,17 @@ def run_experiment(args):
                 selected_layers = candidate_layers
 
             else:
-                temp_model = model_fn().to(device)
-                load_param_dict(temp_model, global_params)
+                load_param_dict(local_model, global_params)
 
-                print("computing importance")
+                # print("computing importance")
                 local_importance = compute_layer_importance(
-                    temp_model,
+                    local_model,
                     loader,
                     device,
                     layer_groups,
                 )
 
-                print("computing consistency")
+                # print("computing consistency")
                 local_consistency = estimate_local_consistency(
                     local_importance=local_importance,
                     server_consistency=consistency_stats,
@@ -925,10 +967,10 @@ def run_experiment(args):
                     min_layers=1,
                 )
 
-            print("training local model")
+            # print("training local model")
             updates, train_loss = train_local(
                 global_params=global_params,
-                model_fn=model_fn,
+                model=local_model,
                 loader=loader,
                 selected_layers=selected_layers,
                 layer_groups=layer_groups,
@@ -990,7 +1032,7 @@ def run_experiment(args):
         # Evaluation
         # ====================================================
         if rnd % args.eval_interval == 0 or rnd == args.rounds:
-            print("begin evaluation at {} round".format(rnd))
+            # print("begin evaluation at {} round".format(rnd))
             eval_model = model_fn()
             acc, test_loss = evaluate(
                 eval_model,
@@ -1040,8 +1082,11 @@ def parse_args():
 
     parser.add_argument("--dataset", type=str, default="cifar10",
                         choices=["cifar10", "cifar100"])
-    parser.add_argument("--data_root", type=str, default="../Dataset")
+    parser.add_argument("--data_root", type=str, default="./data")
     parser.add_argument("--output_dir", type=str, default="./results")
+    parser.add_argument("--download_data", action="store_true")
+    parser.add_argument("--model", type=str, default="resnet18",
+                        choices=["cnn", "resnet18"])
 
     parser.add_argument("--method", type=str, default="ours",
                         choices=[
@@ -1059,7 +1104,7 @@ def parse_args():
     parser.add_argument("--alpha", type=float, default=0.1)
 
     parser.add_argument("--rounds", type=int, default=200)
-    parser.add_argument("--local_epochs", type=int, default=10)
+    parser.add_argument("--local_epochs", type=int, default=5)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--test_batch_size", type=int, default=256)
 
@@ -1079,7 +1124,7 @@ def parse_args():
                         choices=["mild", "moderate", "severe"])
 
     parser.add_argument("--eval_interval", type=int, default=1)
-    parser.add_argument("--num_workers", type=int, default=2)
+    parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
 
     return parser.parse_args()
@@ -1087,5 +1132,5 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
-    args.method = "fedavg"
+    print(args.method)
     run_experiment(args)
