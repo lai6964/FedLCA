@@ -86,6 +86,14 @@ def load_param_dict(model, param_dict):
     model.load_state_dict(param_dict, strict=True)
 
 
+def load_param_dict_excluding(model, param_dict, excluded_names):
+    local_state = model.state_dict()
+    for name, value in param_dict.items():
+        if name not in excluded_names:
+            local_state[name] = value
+    model.load_state_dict(local_state, strict=True)
+
+
 def get_group_tensors(param_dict, group_names, layer_groups):
     tensors = []
     for g in group_names:

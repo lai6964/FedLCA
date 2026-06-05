@@ -1,7 +1,12 @@
 ﻿import torch
 import torch.nn.functional as F
 
-from models import get_param_dict, load_param_dict, set_trainable_layers
+from models import (
+    get_param_dict,
+    load_param_dict,
+    load_param_dict_excluding,
+    set_trainable_layers,
+)
 from utils import normalize_dict
 
 def compute_layer_importance(model, loader, device, layer_groups):
@@ -54,12 +59,22 @@ def train_local(
     lr=0.01,
     momentum=0.9,
     weight_decay=5e-4,
+    preserve_local_groups=None,
 ):
     """
     瀹㈡埛绔湰鍦拌缁冦€?
     鍙缁?selected_layers锛屽叾浣欏眰鍐荤粨銆?
     """
-    load_param_dict(model, global_params)
+    preserve_local_groups = preserve_local_groups or []
+    preserved_names = {
+        name
+        for group in preserve_local_groups
+        for name in layer_groups.get(group, [])
+    }
+    if preserved_names:
+        load_param_dict_excluding(model, global_params, preserved_names)
+    else:
+        load_param_dict(model, global_params)
 
     set_trainable_layers(model, selected_layers, layer_groups)
 
@@ -98,6 +113,36 @@ def train_local(
 
     avg_loss = total_loss / max(total_num, 1)
     return updates, avg_loss
+
+
+def train_local_head(
+    global_params,
+    model,
+    loader,
+    layer_groups,
+    device,
+    lr=0.01,
+    momentum=0.9,
+    weight_decay=5e-4,
+):
+    head_names = set(layer_groups.get("head", []))
+    load_param_dict_excluding(model, global_params, head_names)
+    set_trainable_layers(model, ["head"], layer_groups)
+
+    optimizer = torch.optim.SGD(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=lr,
+        momentum=momentum,
+        weight_decay=weight_decay,
+    )
+
+    model.eval()
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
+        optimizer.zero_grad()
+        loss = F.cross_entropy(model(x), y)
+        loss.backward()
+        optimizer.step()
 
 
 def estimate_local_consistency(

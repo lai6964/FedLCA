@@ -5,10 +5,23 @@ import os
 import numpy as np
 import torch
 
-from client import client_select_layers, compute_layer_importance, estimate_local_consistency, train_local
+from client import (
+    client_select_layers,
+    compute_layer_importance,
+    estimate_local_consistency,
+    train_local,
+    train_local_head,
+)
 from data import build_client_loaders, build_test_loader, dirichlet_partition, load_dataset
 from evaluation import evaluate
-from models import build_model, count_group_params, get_layer_groups, get_param_dict, load_param_dict
+from models import (
+    build_model,
+    count_group_params,
+    get_layer_groups,
+    get_param_dict,
+    load_param_dict,
+    set_trainable_layers,
+)
 from resources import calibrate_resource_budget, generate_client_resources
 from server import aggregate_layer_updates, server_select_candidate_layers, update_server_statistics
 from utils import get_device, set_seed
@@ -52,14 +65,22 @@ def run_experiment(args):
     layer_groups = get_layer_groups(global_model)
     group_param_counts = count_group_params(global_model, layer_groups)
 
-    if args.init_checkpoint:
+    if args.init_with_fedavg and args.init_checkpoint:
         checkpoint = torch.load(args.init_checkpoint, map_location="cpu")
         checkpoint_params = checkpoint.get("model_state", checkpoint)
         load_param_dict(global_model, checkpoint_params)
         print(f"Loaded initial model from: {args.init_checkpoint}")
+    elif args.init_with_fedavg and args.method != "fedavg":
+        raise ValueError(
+            "init_with_fedavg=True requires --init_checkpoint for non-FedAvg methods"
+        )
+    else:
+        print("Using randomly initialized model")
 
     global_params = get_param_dict(global_model)
     client_models = [model_fn().to(device) for _ in range(args.num_clients)]
+    for client_model in client_models:
+        load_param_dict(client_model, global_params)
 
     resources = generate_client_resources(
         args.num_clients,
@@ -72,6 +93,15 @@ def run_experiment(args):
     )
 
     groups = list(layer_groups.keys())
+    trainable_groups = [
+        group for group in groups
+        if not (args.train_fc_first and group == "head")
+    ]
+    if args.train_fc_first:
+        print(
+            "train_fc_first=True: head stays local and global-model "
+            "evaluation does not measure personalized head accuracy"
+        )
 
     importance_stats = {g: 1.0 for g in groups}
     consistency_stats = {g: 1.0 for g in groups}
@@ -94,7 +124,7 @@ def run_experiment(args):
             "avg_selected_layers",
         ])
 
-    total_params = sum(group_param_counts.values())
+    total_params = sum(group_param_counts[group] for group in trainable_groups)
 
     for rnd in range(1, args.rounds + 1):
         selected_clients = np.random.choice(
@@ -111,8 +141,8 @@ def run_experiment(args):
         # 鏈嶅姟鍣ㄥ€欓€夊眰閫夋嫨
         # ====================================================
         if args.method == "fedavg":
-            candidate_layers = groups
-            global_scores = {g: 1.0 for g in groups}
+            candidate_layers = trainable_groups
+            global_scores = {g: 1.0 for g in trainable_groups}
 
         elif args.method in [
             "ours",
@@ -136,7 +166,9 @@ def run_experiment(args):
                 stale_threshold = 10 ** 9
 
             candidate_layers, global_scores = server_select_candidate_layers(
-                layer_groups=layer_groups,
+                layer_groups={
+                    group: layer_groups[group] for group in trainable_groups
+                },
                 importance_stats=imp_for_select,
                 consistency_stats=cons_for_select,
                 last_selected_round=last_selected_round,
@@ -167,6 +199,19 @@ def run_experiment(args):
             num_samples = len(client_indices[cid])
             client_weights.append(num_samples)
 
+            if args.train_fc_first:
+                train_local_head(
+                    global_params=global_params,
+                    model=local_model,
+                    loader=loader,
+                    layer_groups=layer_groups,
+                    device=device,
+                    lr=args.lr,
+                    momentum=args.momentum,
+                    weight_decay=args.weight_decay,
+                )
+                set_trainable_layers(local_model, trainable_groups, layer_groups)
+
             # 瀹㈡埛绔帴鏀舵ā鍨?
             if args.method == "fedavg":
                 downloaded = total_params
@@ -177,10 +222,11 @@ def run_experiment(args):
             if args.method == "fedavg":
                 local_importance = {}
                 local_consistency = {}
-                selected_layers = groups
+                selected_layers = trainable_groups
 
             elif args.method in ["server_only", "wo_client_adaptive"]:
-                load_param_dict(local_model, global_params)
+                if not args.train_fc_first:
+                    load_param_dict(local_model, global_params)
 
                 # print("computing importance")
                 local_importance = compute_layer_importance(
@@ -200,7 +246,8 @@ def run_experiment(args):
                 selected_layers = candidate_layers
 
             else:
-                load_param_dict(local_model, global_params)
+                if not args.train_fc_first:
+                    load_param_dict(local_model, global_params)
 
                 # print("computing importance")
                 local_importance = compute_layer_importance(
@@ -243,6 +290,7 @@ def run_experiment(args):
                 lr=args.lr,
                 momentum=args.momentum,
                 weight_decay=args.weight_decay,
+                preserve_local_groups=["head"] if args.train_fc_first else [],
             )
 
             upload_params = sum(

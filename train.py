@@ -3,6 +3,17 @@ import argparse
 from experiment import run_experiment
 
 
+def str_to_bool(value):
+    if isinstance(value, bool):
+        return value
+    value = value.lower()
+    if value in ("true", "1", "yes", "y"):
+        return True
+    if value in ("false", "0", "no", "n"):
+        return False
+    raise argparse.ArgumentTypeError("Expected a boolean value: true or false")
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
 
@@ -13,6 +24,8 @@ def parse_args():
     parser.add_argument("--download_data", action="store_true")
     parser.add_argument("--model", type=str, default="resnet18",
                         choices=["cnn", "resnet18"])
+    parser.add_argument("--init_with_fedavg", type=str_to_bool, default=False)
+    parser.add_argument("--train_fc_first", type=str_to_bool, default=False)
     parser.add_argument("--init_checkpoint", type=str, default="")
     parser.add_argument("--save_checkpoint", type=str, default="")
 
