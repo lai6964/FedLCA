@@ -12,7 +12,7 @@ from client import (
     train_local,
     train_local_head,
 )
-from data import build_client_loaders, load_dataset, pfl_partition
+from data import build_client_loaders, load_dataset, load_or_create_pfl_partition
 from evaluation import evaluate, evaluate_personalized
 from models import (
     build_model,
@@ -38,12 +38,16 @@ def run_experiment(args):
         download=args.download_data,
     )
 
-    client_indices, client_test_indices = pfl_partition(
+    client_indices, client_test_indices = load_or_create_pfl_partition(
         dataset=train_set,
+        dataset_name=args.dataset,
         num_clients=args.num_clients,
         alpha=args.alpha,
         num_classes=num_classes,
         train_ratio=args.train_ratio,
+        seed=args.seed,
+        partition_dir=args.partition_dir,
+        regenerate=args.regenerate_partition,
     )
 
     client_loaders = build_client_loaders(

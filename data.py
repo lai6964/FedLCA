@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import torchvision
 import torchvision.transforms as transforms
@@ -121,6 +123,76 @@ def pfl_partition(dataset, num_clients, alpha, num_classes, train_ratio=0.75):
         num_classes=num_classes,
     )
     return split_client_indices(client_indices, train_ratio=train_ratio)
+
+
+def partition_file_name(dataset_name, num_clients, alpha, train_ratio, seed):
+    alpha_tag = str(alpha).replace(".", "p")
+    ratio_tag = str(train_ratio).replace(".", "p")
+    return (
+        f"{dataset_name}_clients{num_clients}_alpha{alpha_tag}_"
+        f"ratio{ratio_tag}_seed{seed}.npz"
+    )
+
+
+def save_partition(path, client_train_indices, client_test_indices):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {}
+    for cid, indices in enumerate(client_train_indices):
+        payload[f"train_{cid}"] = np.array(indices, dtype=np.int64)
+    for cid, indices in enumerate(client_test_indices):
+        payload[f"test_{cid}"] = np.array(indices, dtype=np.int64)
+    payload["num_clients"] = np.array([len(client_train_indices)], dtype=np.int64)
+    np.savez_compressed(path, **payload)
+
+
+def load_partition(path):
+    payload = np.load(path, allow_pickle=False)
+    num_clients = int(payload["num_clients"][0])
+    client_train_indices = [
+        payload[f"train_{cid}"].astype(np.int64).tolist()
+        for cid in range(num_clients)
+    ]
+    client_test_indices = [
+        payload[f"test_{cid}"].astype(np.int64).tolist()
+        for cid in range(num_clients)
+    ]
+    return client_train_indices, client_test_indices
+
+
+def load_or_create_pfl_partition(
+    dataset,
+    dataset_name,
+    num_clients,
+    alpha,
+    num_classes,
+    train_ratio=0.75,
+    seed=0,
+    partition_dir="./data/partitions",
+    regenerate=False,
+):
+    file_name = partition_file_name(
+        dataset_name=dataset_name,
+        num_clients=num_clients,
+        alpha=alpha,
+        train_ratio=train_ratio,
+        seed=seed,
+    )
+    partition_path = os.path.join(partition_dir, file_name)
+
+    if os.path.exists(partition_path) and not regenerate:
+        print(f"Loaded client partition from: {partition_path}")
+        return load_partition(partition_path)
+
+    client_train_indices, client_test_indices = pfl_partition(
+        dataset=dataset,
+        num_clients=num_clients,
+        alpha=alpha,
+        num_classes=num_classes,
+        train_ratio=train_ratio,
+    )
+    save_partition(partition_path, client_train_indices, client_test_indices)
+    print(f"Saved client partition to: {partition_path}")
+    return client_train_indices, client_test_indices
 
 
 def build_client_loaders(dataset, client_indices, batch_size, num_workers=2, shuffle=True):

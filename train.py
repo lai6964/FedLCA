@@ -45,6 +45,8 @@ def parse_args():
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--train_ratio", type=float, default=0.75)
     parser.add_argument("--personalized_eval", type=str_to_bool, default=True)
+    parser.add_argument("--partition_dir", type=str, default="./data/partitions")
+    parser.add_argument("--regenerate_partition", type=str_to_bool, default=False)
 
     parser.add_argument("--rounds", type=int, default=200)
     parser.add_argument("--local_epochs", type=int, default=5)
