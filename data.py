@@ -1,82 +1,91 @@
-﻿import numpy as np
+import numpy as np
 import torchvision
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import ConcatDataset, DataLoader, Subset
 
-def load_dataset(dataset_name, data_root="./data", download=False):
+
+def get_cifar_transforms(dataset_name):
     dataset_name = dataset_name.lower()
-
     if dataset_name == "cifar10":
-        num_classes = 10
-        train_transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.4914, 0.4822, 0.4465),
-                std=(0.2470, 0.2435, 0.2616),
-            ),
-        ])
-        test_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.4914, 0.4822, 0.4465),
-                std=(0.2470, 0.2435, 0.2616),
-            ),
-        ])
-
-        train_set = torchvision.datasets.CIFAR10(
-            root=data_root, train=True, download=download, transform=train_transform
-        )
-        test_set = torchvision.datasets.CIFAR10(
-            root=data_root, train=False, download=download, transform=test_transform
-        )
-
+        mean = (0.4914, 0.4822, 0.4465)
+        std = (0.2470, 0.2435, 0.2616)
     elif dataset_name == "cifar100":
-        num_classes = 100
-        train_transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.5071, 0.4867, 0.4408),
-                std=(0.2675, 0.2565, 0.2761),
-            ),
-        ])
-        test_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=(0.5071, 0.4867, 0.4408),
-                std=(0.2675, 0.2565, 0.2761),
-            ),
-        ])
-
-        train_set = torchvision.datasets.CIFAR100(
-            root=data_root, train=True, download=download, transform=train_transform
-        )
-        test_set = torchvision.datasets.CIFAR100(
-            root=data_root, train=False, download=download, transform=test_transform
-        )
+        mean = (0.5071, 0.4867, 0.4408)
+        std = (0.2675, 0.2565, 0.2761)
     else:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
-    return train_set, test_set, num_classes
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+    return train_transform, test_transform
 
 
-def dirichlet_partition(dataset, num_clients, alpha, num_classes):
-    """
-    鎸夋爣绛句娇鐢?Dirichlet 鍒嗗竷鏋勯€?Non-IID 瀹㈡埛绔暟鎹€?
-    """
-    targets = np.array(dataset.targets)
+def build_cifar_dataset(dataset_name, data_root="./data", download=False, transform=None):
+    dataset_name = dataset_name.lower()
+    if dataset_name == "cifar10":
+        dataset_cls = torchvision.datasets.CIFAR10
+        num_classes = 10
+    elif dataset_name == "cifar100":
+        dataset_cls = torchvision.datasets.CIFAR100
+        num_classes = 100
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
+
+    train_set = dataset_cls(
+        root=data_root,
+        train=True,
+        download=download,
+        transform=transform,
+    )
+    test_set = dataset_cls(
+        root=data_root,
+        train=False,
+        download=download,
+        transform=transform,
+    )
+    return ConcatDataset([train_set, test_set]), num_classes
+
+
+def get_targets(dataset):
+    targets = []
+    for subset in dataset.datasets:
+        targets.extend(subset.targets)
+    return np.array(targets)
+
+
+def load_dataset(dataset_name, data_root="./data", download=False):
+    train_transform, test_transform = get_cifar_transforms(dataset_name)
+    train_dataset, num_classes = build_cifar_dataset(
+        dataset_name,
+        data_root=data_root,
+        download=download,
+        transform=train_transform,
+    )
+    test_dataset, _ = build_cifar_dataset(
+        dataset_name,
+        data_root=data_root,
+        download=False,
+        transform=test_transform,
+    )
+    return train_dataset, test_dataset, num_classes
+
+
+def dirichlet_partition(targets, num_clients, alpha, num_classes):
     client_indices = [[] for _ in range(num_clients)]
 
     for c in range(num_classes):
         class_indices = np.where(targets == c)[0]
         np.random.shuffle(class_indices)
 
-        proportions = np.random.dirichlet(
-            alpha=np.repeat(alpha, num_clients)
-        )
+        proportions = np.random.dirichlet(np.repeat(alpha, num_clients))
         proportions = proportions / proportions.sum()
 
         splits = (np.cumsum(proportions) * len(class_indices)).astype(int)[:-1]
@@ -91,26 +100,39 @@ def dirichlet_partition(dataset, num_clients, alpha, num_classes):
     return client_indices
 
 
-def build_client_loaders(train_set, client_indices, batch_size, num_workers=2):
+def split_client_indices(client_indices, train_ratio=0.75):
+    train_indices = []
+    test_indices = []
+    for indices in client_indices:
+        indices = list(indices)
+        np.random.shuffle(indices)
+        train_size = int(len(indices) * train_ratio)
+        train_indices.append(indices[:train_size])
+        test_indices.append(indices[train_size:])
+    return train_indices, test_indices
+
+
+def pfl_partition(dataset, num_clients, alpha, num_classes, train_ratio=0.75):
+    targets = get_targets(dataset)
+    client_indices = dirichlet_partition(
+        targets=targets,
+        num_clients=num_clients,
+        alpha=alpha,
+        num_classes=num_classes,
+    )
+    return split_client_indices(client_indices, train_ratio=train_ratio)
+
+
+def build_client_loaders(dataset, client_indices, batch_size, num_workers=2, shuffle=True):
     loaders = []
     for indices in client_indices:
-        subset = Subset(train_set, indices)
+        subset = Subset(dataset, indices)
         loader = DataLoader(
             subset,
             batch_size=batch_size,
-            shuffle=True,
+            shuffle=shuffle,
             num_workers=num_workers,
             pin_memory=True,
         )
         loaders.append(loader)
     return loaders
-
-
-def build_test_loader(test_set, batch_size=256, num_workers=2):
-    return DataLoader(
-        test_set,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True,
-    )

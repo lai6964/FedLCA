@@ -3,9 +3,10 @@ import torch.nn.functional as F
 
 from models import load_param_dict
 
-def evaluate(model, params, test_loader, device):
+def evaluate(model, params, test_loader, device, load_params=True):
     model.to(device)
-    load_param_dict(model, params)
+    if load_params:
+        load_param_dict(model, params)
     model.eval()
 
     correct = 0
@@ -26,3 +27,24 @@ def evaluate(model, params, test_loader, device):
     loss = loss_sum / max(total, 1)
 
     return acc, loss
+
+
+def evaluate_personalized(client_models, global_params, test_loaders, device, client_weights):
+    total_correct = 0
+    total_num = 0
+    total_loss = 0.0
+
+    for cid, model in enumerate(client_models):
+        acc, loss = evaluate(
+            model,
+            global_params,
+            test_loaders[cid],
+            device,
+            load_params=False,
+        )
+        num_samples = client_weights[cid]
+        total_correct += acc * num_samples
+        total_loss += loss * num_samples
+        total_num += num_samples
+
+    return total_correct / max(total_num, 1), total_loss / max(total_num, 1)

@@ -12,14 +12,15 @@ from client import (
     train_local,
     train_local_head,
 )
-from data import build_client_loaders, build_test_loader, dirichlet_partition, load_dataset
-from evaluation import evaluate
+from data import build_client_loaders, load_dataset, pfl_partition
+from evaluation import evaluate, evaluate_personalized
 from models import (
     build_model,
     count_group_params,
     get_layer_groups,
     get_param_dict,
     load_param_dict,
+    load_param_dict_excluding,
     set_trainable_layers,
 )
 from resources import calibrate_resource_budget, generate_client_resources
@@ -37,11 +38,12 @@ def run_experiment(args):
         download=args.download_data,
     )
 
-    client_indices = dirichlet_partition(
+    client_indices, client_test_indices = pfl_partition(
         dataset=train_set,
         num_clients=args.num_clients,
         alpha=args.alpha,
         num_classes=num_classes,
+        train_ratio=args.train_ratio,
     )
 
     client_loaders = build_client_loaders(
@@ -50,10 +52,12 @@ def run_experiment(args):
         batch_size=args.batch_size,
         num_workers=args.num_workers,
     )
-    test_loader = build_test_loader(
+    client_test_loaders = build_client_loaders(
         test_set,
+        client_test_indices,
         batch_size=args.test_batch_size,
         num_workers=args.num_workers,
+        shuffle=False,
     )
 
     model_fn = lambda: build_model(
@@ -325,6 +329,14 @@ def run_experiment(args):
             small_layer_lr=small_layer_lr,
         )
 
+        if args.train_fc_first:
+            head_names = set(layer_groups.get("head", []))
+            for client_model in client_models:
+                load_param_dict_excluding(client_model, global_params, head_names)
+        else:
+            for client_model in client_models:
+                load_param_dict(client_model, global_params)
+
         # ====================================================
         # 鏇存柊鏈嶅姟鍣ㄥ眰绾х粺璁￠噺
         # ====================================================
@@ -345,13 +357,35 @@ def run_experiment(args):
         # ====================================================
         if rnd % args.eval_interval == 0 or rnd == args.rounds:
             # print("begin evaluation at {} round".format(rnd))
-            eval_model = model_fn()
-            acc, test_loss = evaluate(
-                eval_model,
-                global_params,
-                test_loader,
-                device,
-            )
+            if args.personalized_eval:
+                test_sample_counts = [len(indices) for indices in client_test_indices]
+                acc, test_loss = evaluate_personalized(
+                    client_models,
+                    global_params,
+                    client_test_loaders,
+                    device,
+                    test_sample_counts,
+                )
+            else:
+                eval_model = model_fn()
+                all_test_indices = [
+                    idx
+                    for indices in client_test_indices
+                    for idx in indices
+                ]
+                global_test_loader = build_client_loaders(
+                    test_set,
+                    [all_test_indices],
+                    batch_size=args.test_batch_size,
+                    num_workers=args.num_workers,
+                    shuffle=False,
+                )[0]
+                acc, test_loss = evaluate(
+                    eval_model,
+                    global_params,
+                    global_test_loader,
+                    device,
+                )
 
             avg_train_loss = float(np.mean(train_losses))
             avg_selected_layers = float(np.mean(selected_layer_nums))
