@@ -1,4 +1,8 @@
 import argparse
+import datetime
+import os
+import sys
+import traceback
 
 from experiment import run_experiment
 
@@ -24,8 +28,10 @@ def parse_args():
     parser.add_argument("--download_data", action="store_true")
     parser.add_argument("--model", type=str, default="resnet18",
                         choices=["cnn", "resnet18"])
-    parser.add_argument("--init_with_fedavg", type=str_to_bool, default=True)
-    parser.add_argument("--train_fc_first", type=str_to_bool, default=False)
+
+
+    parser.add_argument("--init_with_fedavg", type=str_to_bool, default=False)
+    parser.add_argument("--train_fc_first", type=str_to_bool, default=True)
     parser.add_argument("--init_checkpoint", type=str, default="")
     parser.add_argument("--save_checkpoint", type=str, default="")
 
@@ -75,7 +81,67 @@ def parse_args():
     return parser.parse_args()
 
 
+class Tee:
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, data):
+        for stream in self.streams:
+            stream.write(data)
+            stream.flush()
+
+    def flush(self):
+        for stream in self.streams:
+            stream.flush()
+
+
+def get_run_log_path(args):
+    log_name = f"{args.method}_{args.dataset}_a{args.alpha}.log"
+    return os.path.join(args.output_dir, log_name)
+
+
+def print_run_settings(args):
+    print("=" * 80)
+    print("Run settings")
+    print("=" * 80)
+    print(f"Started at: {datetime.datetime.now().isoformat(timespec='seconds')}")
+    print(f"Command: {' '.join(sys.argv)}")
+    print(f"Working directory: {os.getcwd()}")
+    print()
+    for key, value in sorted(vars(args).items()):
+        print(f"{key}: {value}")
+    print("=" * 80)
+    print()
+
+
+def run_with_logging(args):
+    os.makedirs(args.output_dir, exist_ok=True)
+    log_path = get_run_log_path(args)
+
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+
+    with open(log_path, "w", encoding="utf-8") as log_file:
+        sys.stdout = Tee(original_stdout, log_file)
+        sys.stderr = Tee(original_stderr, log_file)
+        try:
+            print(f"Log file: {log_path}")
+            print_run_settings(args)
+            print(args.method)
+            run_experiment(args)
+            print()
+            print(f"Finished at: {datetime.datetime.now().isoformat(timespec='seconds')}")
+            print(f"Log saved to: {log_path}")
+        except Exception:
+            print()
+            print("Run failed with exception:")
+            traceback.print_exc()
+            raise
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+
+
 if __name__ == "__main__":
     args = parse_args()
-    print(args.method)
-    run_experiment(args)
+    run_with_logging(args)
