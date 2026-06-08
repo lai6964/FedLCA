@@ -10,8 +10,15 @@ def set_seed(seed: int = 0):
     torch.cuda.manual_seed_all(seed)
 
 
-def get_device():
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def get_device(device_id=0):
+    if not torch.cuda.is_available():
+        return torch.device("cpu")
+    if device_id < 0 or device_id >= torch.cuda.device_count():
+        raise ValueError(
+            f"Invalid device_id={device_id}; available CUDA devices: "
+            f"0..{torch.cuda.device_count() - 1}"
+        )
+    return torch.device(f"cuda:{device_id}")
 
 
 def flatten_tensors(tensors):

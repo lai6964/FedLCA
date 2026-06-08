@@ -76,6 +76,7 @@ def parse_args():
 
     parser.add_argument("--eval_interval", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--device_id", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
 
     return parser.parse_args()

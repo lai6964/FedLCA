@@ -29,7 +29,7 @@ from utils import get_device, set_seed
 
 def run_experiment(args):
     set_seed(args.seed)
-    device = get_device()
+    device = get_device(args.device_id)
     print(device)
 
     train_set, test_set, num_classes = load_dataset(
