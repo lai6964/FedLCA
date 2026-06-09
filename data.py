@@ -1,9 +1,10 @@
 import os
 
 import numpy as np
+from PIL import Image
 import torchvision
 import torchvision.transforms as transforms
-from torch.utils.data import ConcatDataset, DataLoader, Subset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 
 
 def get_cifar_transforms(dataset_name):
@@ -28,6 +29,104 @@ def get_cifar_transforms(dataset_name):
         transforms.Normalize(mean=mean, std=std),
     ])
     return train_transform, test_transform
+
+
+def get_tinyimagenet_transforms():
+    mean = (0.485, 0.456, 0.406)
+    std = (0.229, 0.224, 0.225)
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(64, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+    return train_transform, test_transform
+
+
+class TinyImageNetDataset(Dataset):
+    def __init__(self, root, split="train", transform=None):
+        self.root = find_tinyimagenet_root(root)
+        self.split = split
+        self.transform = transform
+        self.samples = []
+        self.targets = []
+
+        class_names = sorted([
+            name for name in os.listdir(os.path.join(self.root, "train"))
+            if os.path.isdir(os.path.join(self.root, "train", name))
+        ])
+        self.class_to_idx = {name: idx for idx, name in enumerate(class_names)}
+
+        if split == "train":
+            self._load_train_samples(class_names)
+        elif split == "val":
+            self._load_val_samples()
+        else:
+            raise ValueError(f"Unsupported TinyImageNet split: {split}")
+
+    def _load_train_samples(self, class_names):
+        for class_name in class_names:
+            image_dir = os.path.join(self.root, "train", class_name, "images")
+            target = self.class_to_idx[class_name]
+            for file_name in sorted(os.listdir(image_dir)):
+                if is_image_file(file_name):
+                    self.samples.append((os.path.join(image_dir, file_name), target))
+                    self.targets.append(target)
+
+    def _load_val_samples(self):
+        annotation_path = os.path.join(self.root, "val", "val_annotations.txt")
+        image_dir = os.path.join(self.root, "val", "images")
+        with open(annotation_path, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split("\t")
+                if len(parts) < 2:
+                    continue
+                file_name, class_name = parts[0], parts[1]
+                if class_name not in self.class_to_idx:
+                    continue
+                target = self.class_to_idx[class_name]
+                self.samples.append((os.path.join(image_dir, file_name), target))
+                self.targets.append(target)
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, index):
+        image_path, target = self.samples[index]
+        image = Image.open(image_path).convert("RGB")
+        if self.transform is not None:
+            image = self.transform(image)
+        return image, target
+
+
+def is_image_file(file_name):
+    return file_name.lower().endswith((".jpg", ".jpeg", ".png"))
+
+
+def find_tinyimagenet_root(data_root):
+    candidates = [
+        data_root,
+        os.path.join(data_root, "tiny-imagenet-200"),
+        os.path.join(data_root, "TinyImagenet"),
+        os.path.join(data_root, "tinyimagenet"),
+        os.path.join(data_root, "rawdata", "tiny-imagenet-200"),
+        os.path.join(data_root, "rawdata", "TinyImagenet"),
+        os.path.join(data_root, "rawdata", "tinyimagenet"),
+    ]
+    for candidate in candidates:
+        if (
+            os.path.isdir(os.path.join(candidate, "train"))
+            and os.path.isdir(os.path.join(candidate, "val"))
+        ):
+            return candidate
+    raise FileNotFoundError(
+        "TinyImageNet not found. Expected one of: "
+        + ", ".join(candidates)
+    )
 
 
 def build_cifar_dataset(dataset_name, data_root="./data", download=False, transform=None):
@@ -56,6 +155,12 @@ def build_cifar_dataset(dataset_name, data_root="./data", download=False, transf
     return ConcatDataset([train_set, test_set]), num_classes
 
 
+def build_tinyimagenet_dataset(data_root="./data", transform=None):
+    train_set = TinyImageNetDataset(data_root, split="train", transform=transform)
+    val_set = TinyImageNetDataset(data_root, split="val", transform=transform)
+    return ConcatDataset([train_set, val_set]), 200
+
+
 def get_targets(dataset):
     targets = []
     for subset in dataset.datasets:
@@ -64,19 +169,33 @@ def get_targets(dataset):
 
 
 def load_dataset(dataset_name, data_root="./data", download=False):
-    train_transform, test_transform = get_cifar_transforms(dataset_name)
-    train_dataset, num_classes = build_cifar_dataset(
-        dataset_name,
-        data_root=data_root,
-        download=download,
-        transform=train_transform,
-    )
-    test_dataset, _ = build_cifar_dataset(
-        dataset_name,
-        data_root=data_root,
-        download=False,
-        transform=test_transform,
-    )
+    dataset_name = dataset_name.lower()
+    if dataset_name in ["cifar10", "cifar100"]:
+        train_transform, test_transform = get_cifar_transforms(dataset_name)
+        train_dataset, num_classes = build_cifar_dataset(
+            dataset_name,
+            data_root=data_root,
+            download=download,
+            transform=train_transform,
+        )
+        test_dataset, _ = build_cifar_dataset(
+            dataset_name,
+            data_root=data_root,
+            download=False,
+            transform=test_transform,
+        )
+    elif dataset_name == "tinyimagenet":
+        train_transform, test_transform = get_tinyimagenet_transforms()
+        train_dataset, num_classes = build_tinyimagenet_dataset(
+            data_root=data_root,
+            transform=train_transform,
+        )
+        test_dataset, _ = build_tinyimagenet_dataset(
+            data_root=data_root,
+            transform=test_transform,
+        )
+    else:
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
     return train_dataset, test_dataset, num_classes
 
 

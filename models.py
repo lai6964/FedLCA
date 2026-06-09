@@ -7,8 +7,9 @@ import torchvision
 from utils import flatten_tensors
 
 class CifarCNN(nn.Module):
-    def __init__(self, num_classes=10):
+    def __init__(self, num_classes=10, input_size=32):
         super().__init__()
+        feature_size = 64 * (input_size // 4) * (input_size // 4)
         self.conv1 = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=5, padding=2),
             nn.ReLU(inplace=True),
@@ -21,7 +22,7 @@ class CifarCNN(nn.Module):
         )
         self.fc1 = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64 * 8 * 8, 512),
+            nn.Linear(feature_size, 512),
             nn.ReLU(inplace=True),
         )
         self.fc2 = nn.Linear(512, num_classes)
@@ -33,10 +34,49 @@ class CifarCNN(nn.Module):
         return self.fc2(x)
 
 
-def build_model(num_classes=10, model_name="cnn"):
+class FedAvgCNN(nn.Module):
+    def __init__(self, num_classes=10, input_size=32):
+        super().__init__()
+        feature_size = 64 * (((input_size - 4) // 2 - 4) // 2) ** 2
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 32, kernel_size=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=5),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        self.fc1 = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(feature_size, 512),
+            nn.ReLU(inplace=True),
+        )
+        self.fc2 = nn.Linear(512, num_classes)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.fc1(x)
+        return self.fc2(x)
+
+
+def get_input_size(dataset_name):
+    dataset_name = dataset_name.lower()
+    if dataset_name == "tinyimagenet":
+        return 64
+    return 32
+
+
+def build_model(num_classes=10, model_name="cnn", dataset_name="cifar10"):
     model_name = model_name.lower()
+    input_size = get_input_size(dataset_name)
     if model_name == "cnn":
-        return CifarCNN(num_classes=num_classes)
+        return CifarCNN(num_classes=num_classes, input_size=input_size)
+
+    if model_name == "fedavgcnn":
+        return FedAvgCNN(num_classes=num_classes, input_size=input_size)
 
     if model_name != "resnet18":
         raise ValueError(f"Unsupported model: {model_name}")

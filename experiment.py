@@ -67,6 +67,7 @@ def run_experiment(args):
     model_fn = lambda: build_model(
         num_classes=num_classes,
         model_name=args.model,
+        dataset_name=args.dataset,
     )
 
     global_model = model_fn()

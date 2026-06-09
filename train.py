@@ -22,12 +22,12 @@ def parse_args():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--dataset", type=str, default="cifar100",
-                        choices=["cifar10", "cifar100"])
+                        choices=["cifar10", "cifar100", "tinyimagenet"])
     parser.add_argument("--data_root", type=str, default="./data")
     parser.add_argument("--output_dir", type=str, default="./results")
     parser.add_argument("--download_data", action="store_true")
     parser.add_argument("--model", type=str, default="resnet18",
-                        choices=["cnn", "resnet18"])
+                        choices=["cnn", "fedavgcnn", "resnet18"])
 
 
     parser.add_argument("--init_with_fedavg", type=str_to_bool, default=False)
