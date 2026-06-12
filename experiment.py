@@ -6,6 +6,7 @@ import numpy as np
 import torch
 
 from client import (
+    build_topk_param_upload,
     client_select_layers,
     compute_layer_importance,
     estimate_local_consistency,
@@ -24,7 +25,12 @@ from models import (
     set_trainable_layers,
 )
 from resources import calibrate_resource_budget, generate_client_resources
-from server import aggregate_layer_updates, server_select_candidate_layers, update_server_statistics
+from server import (
+    aggregate_layer_updates,
+    aggregate_topk_param_values,
+    server_select_candidate_layers,
+    update_server_statistics,
+)
 from utils import get_device, set_seed
 
 def run_experiment(args):
@@ -143,13 +149,17 @@ def run_experiment(args):
         ).tolist()
 
         old_global_params = None
-        if args.method != "fedavg":
+        if args.method not in ["fedavg", "topk_params"]:
             old_global_params = copy.deepcopy(global_params)
 
         # ====================================================
         # 鏈嶅姟鍣ㄥ€欓€夊眰閫夋嫨
         # ====================================================
         if args.method == "fedavg":
+            candidate_layers = trainable_groups
+            global_scores = {g: 1.0 for g in trainable_groups}
+
+        elif args.method == "topk_params":
             candidate_layers = trainable_groups
             global_scores = {g: 1.0 for g in trainable_groups}
 
@@ -222,13 +232,18 @@ def run_experiment(args):
                 set_trainable_layers(local_model, trainable_groups, layer_groups)
 
             # 瀹㈡埛绔帴鏀舵ā鍨?
-            if args.method == "fedavg":
+            if args.method in ["fedavg", "topk_params"]:
                 downloaded = total_params
             else:
                 downloaded = sum(group_param_counts[g] for g in candidate_layers)
             round_download_params += downloaded
 
             if args.method == "fedavg":
+                local_importance = {}
+                local_consistency = {}
+                selected_layers = trainable_groups
+
+            elif args.method == "topk_params":
                 local_importance = {}
                 local_consistency = {}
                 selected_layers = trainable_groups
@@ -302,10 +317,21 @@ def run_experiment(args):
                 preserve_local_groups=["head"] if args.train_fc_first else [],
             )
 
-            upload_params = sum(
-                group_param_counts[g] for g in selected_layers
-            )
-            compute_params = upload_params
+            if args.method == "topk_params":
+                updates, upload_params = build_topk_param_upload(
+                    model=local_model,
+                    loader=loader,
+                    device=device,
+                    layer_groups=layer_groups,
+                    candidate_layers=trainable_groups,
+                    topk_ratio=args.topk_param_ratio,
+                )
+            else:
+                upload_params = sum(
+                    group_param_counts[g] for g in selected_layers
+                )
+
+            compute_params = sum(group_param_counts[g] for g in selected_layers)
 
             round_upload_params += upload_params
             round_compute_params += compute_params
@@ -318,21 +344,27 @@ def run_experiment(args):
         # ====================================================
         # 鏈嶅姟鍣ㄥ垎灞傝仛鍚?
         # ====================================================
-        if args.method == "fedavg":
-            min_clients_per_layer = 1
-            small_layer_lr = 1.0
+        if args.method == "topk_params":
+            global_params, layer_client_count = aggregate_topk_param_values(
+                global_params=global_params,
+                client_uploads=client_updates,
+            )
         else:
-            min_clients_per_layer = args.min_clients_per_layer
-            small_layer_lr = args.small_layer_lr
+            if args.method == "fedavg":
+                min_clients_per_layer = 1
+                small_layer_lr = 1.0
+            else:
+                min_clients_per_layer = args.min_clients_per_layer
+                small_layer_lr = args.small_layer_lr
 
-        global_params, layer_client_count = aggregate_layer_updates(
-            global_params=global_params,
-            client_updates=client_updates,
-            client_weights=client_weights,
-            layer_groups=layer_groups,
-            min_clients_per_layer=min_clients_per_layer,
-            small_layer_lr=small_layer_lr,
-        )
+            global_params, layer_client_count = aggregate_layer_updates(
+                global_params=global_params,
+                client_updates=client_updates,
+                client_weights=client_weights,
+                layer_groups=layer_groups,
+                min_clients_per_layer=min_clients_per_layer,
+                small_layer_lr=small_layer_lr,
+            )
 
         if args.train_fc_first:
             head_names = set(layer_groups.get("head", []))
@@ -345,7 +377,7 @@ def run_experiment(args):
         # ====================================================
         # 鏇存柊鏈嶅姟鍣ㄥ眰绾х粺璁￠噺
         # ====================================================
-        if args.method != "fedavg":
+        if args.method not in ["fedavg", "topk_params"]:
             importance_stats, consistency_stats = update_server_statistics(
                 old_global=old_global_params,
                 new_global=global_params,

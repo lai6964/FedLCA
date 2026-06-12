@@ -145,6 +145,75 @@ def train_local_head(
         optimizer.step()
 
 
+def build_topk_param_upload(
+    model,
+    loader,
+    device,
+    layer_groups,
+    candidate_layers,
+    topk_ratio=0.2,
+):
+    selected_names = {
+        name
+        for group in candidate_layers
+        for name in layer_groups.get(group, [])
+    }
+    named_params = {
+        name: param
+        for name, param in model.named_parameters()
+        if name in selected_names and param.requires_grad
+    }
+    if not named_params:
+        return {}, 0
+
+    model.train()
+    model.zero_grad()
+    try:
+        x, y = next(iter(loader))
+    except StopIteration:
+        return {}, 0
+
+    x, y = x.to(device), y.to(device)
+    loss = F.cross_entropy(model(x), y)
+    loss.backward()
+
+    importance_parts = []
+    names = []
+    for name, param in named_params.items():
+        if param.grad is None:
+            continue
+        importance_parts.append(torch.abs(param.detach() * param.grad.detach()).reshape(-1).cpu())
+        names.append(name)
+
+    if not importance_parts:
+        model.zero_grad()
+        return {}, 0
+
+    flat_importance = torch.cat(importance_parts)
+    total = flat_importance.numel()
+    k = min(total, max(1, int(total * topk_ratio)))
+    topk_indices = torch.topk(flat_importance, k=k, largest=True).indices
+
+    upload = {}
+    offset = 0
+    topk_indices = topk_indices.sort().values
+    for name, scores in zip(names, importance_parts):
+        param = named_params[name].detach().cpu().reshape(-1)
+        next_offset = offset + scores.numel()
+        mask = (topk_indices >= offset) & (topk_indices < next_offset)
+        local_indices = topk_indices[mask] - offset
+        if local_indices.numel() > 0:
+            upload[name] = {
+                "indices": local_indices.to(torch.long),
+                "values": param[local_indices].clone(),
+                "shape": tuple(named_params[name].shape),
+            }
+        offset = next_offset
+
+    model.zero_grad()
+    return upload, k
+
+
 def estimate_local_consistency(
     local_importance,
     server_consistency,

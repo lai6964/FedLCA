@@ -105,6 +105,39 @@ def aggregate_layer_updates(
     return new_global, layer_client_count
 
 
+def aggregate_topk_param_values(global_params, client_uploads):
+    new_global = copy.deepcopy(global_params)
+    sums = {}
+    counts = {}
+
+    for upload in client_uploads:
+        for name, payload in upload.items():
+            if name not in new_global or not torch.is_floating_point(new_global[name]):
+                continue
+            if name not in sums:
+                sums[name] = torch.zeros_like(new_global[name]).reshape(-1)
+                counts[name] = torch.zeros(
+                    new_global[name].numel(),
+                    dtype=torch.float32,
+                )
+
+            indices = payload["indices"].to(torch.long)
+            values = payload["values"].to(sums[name].dtype)
+            sums[name][indices] += values
+            counts[name][indices] += 1.0
+
+    layer_client_count = {}
+    for name, flat_sum in sums.items():
+        count = counts[name]
+        updated = count > 0
+        if updated.any():
+            flat_global = new_global[name].reshape(-1)
+            flat_global[updated] = flat_sum[updated] / count[updated]
+            new_global[name] = flat_global.reshape_as(new_global[name])
+
+    return new_global, layer_client_count
+
+
 def update_server_statistics(
     old_global,
     new_global,

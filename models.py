@@ -62,6 +62,56 @@ class FedAvgCNN(nn.Module):
         return self.fc2(x)
 
 
+class TinyImageNetCNN5(nn.Module):
+    def __init__(self, num_classes=200):
+        super().__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(64, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+        )
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        self.conv5 = nn.Sequential(
+            nn.Conv2d(128, 256, kernel_size=3, padding=1),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+        )
+        self.pool = nn.AdaptiveAvgPool2d((4, 4))
+        self.fc1 = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(256 * 4 * 4, 512),
+            nn.ReLU(inplace=True),
+        )
+        self.fc2 = nn.Linear(512, num_classes)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.conv2(x)
+        x = self.conv3(x)
+        x = self.conv4(x)
+        x = self.conv5(x)
+        x = self.pool(x)
+        x = self.fc1(x)
+        return self.fc2(x)
+
+
 def get_input_size(dataset_name):
     dataset_name = dataset_name.lower()
     if dataset_name == "tinyimagenet":
@@ -71,7 +121,11 @@ def get_input_size(dataset_name):
 
 def build_model(num_classes=10, model_name="cnn", dataset_name="cifar10"):
     model_name = model_name.lower()
+    dataset_name = dataset_name.lower()
     input_size = get_input_size(dataset_name)
+    if dataset_name == "tinyimagenet" and model_name in ["cnn", "fedavgcnn"]:
+        return TinyImageNetCNN5(num_classes=num_classes)
+
     if model_name == "cnn":
         return CifarCNN(num_classes=num_classes, input_size=input_size)
 
