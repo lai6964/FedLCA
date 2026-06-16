@@ -47,6 +47,25 @@ def get_tinyimagenet_transforms():
     return train_transform, test_transform
 
 
+def get_large_image_transforms():
+    mean = (0.485, 0.456, 0.406)
+    std = (0.229, 0.224, 0.225)
+    train_transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.RandomCrop(224),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+    test_transform = transforms.Compose([
+        transforms.Resize((256, 256)),
+        transforms.CenterCrop(224),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=mean, std=std),
+    ])
+    return train_transform, test_transform
+
+
 class TinyImageNetDataset(Dataset):
     def __init__(self, root, split="train", transform=None):
         self.root = find_tinyimagenet_root(root)
@@ -129,6 +148,79 @@ def find_tinyimagenet_root(data_root):
     )
 
 
+def find_domain_dataset_root(data_root, dataset_name, domain_options):
+    aliases = {
+        "domainnet": ["DomainNet", "domainnet", "Domainnet"],
+        "officehome": [
+            "OfficeHome",
+            "officehome",
+            "OfficeHomeDataset_10072016",
+            "OfficeHomeDataset",
+        ],
+    }
+    candidates = [data_root]
+    for alias in aliases[dataset_name]:
+        candidates.append(os.path.join(data_root, alias))
+        candidates.append(os.path.join(data_root, "rawdata", alias))
+
+    for candidate in candidates:
+        resolved_domains = []
+        for options in domain_options:
+            found = None
+            for domain in options:
+                if os.path.isdir(os.path.join(candidate, domain)):
+                    found = domain
+                    break
+            if found is not None:
+                resolved_domains.append(found)
+        if len(resolved_domains) == len(domain_options):
+            return candidate, resolved_domains
+    raise FileNotFoundError(
+        f"{dataset_name} not found. Expected domain folders under one of: "
+        + ", ".join(candidates)
+    )
+
+
+def build_domain_image_dataset(dataset_name, data_root="./data", transform=None):
+    dataset_name = dataset_name.lower()
+    if dataset_name == "domainnet":
+        domain_options = [
+            ["clipart"],
+            ["infograph"],
+            ["painting"],
+            ["quickdraw"],
+            ["real"],
+            ["sketch"],
+        ]
+    elif dataset_name == "officehome":
+        domain_options = [
+            ["Art"],
+            ["Clipart"],
+            ["Product"],
+            ["Real_World", "Real World"],
+        ]
+    else:
+        raise ValueError(f"Unsupported domain dataset: {dataset_name}")
+
+    root, domains = find_domain_dataset_root(data_root, dataset_name, domain_options)
+    datasets = []
+    class_to_idx = None
+    for domain in domains:
+        dataset = torchvision.datasets.ImageFolder(
+            root=os.path.join(root, domain),
+            transform=transform,
+        )
+        if class_to_idx is None:
+            class_to_idx = dataset.class_to_idx
+        elif dataset.class_to_idx != class_to_idx:
+            raise ValueError(
+                f"Inconsistent class folders in {dataset_name}/{domain}"
+            )
+        datasets.append(dataset)
+
+    return ConcatDataset(datasets), len(class_to_idx)
+
+
 def build_cifar_dataset(dataset_name, data_root="./data", download=False, transform=None):
     dataset_name = dataset_name.lower()
     if dataset_name == "cifar10":
@@ -191,6 +283,18 @@ def load_dataset(dataset_name, data_root="./data", download=False):
             transform=train_transform,
         )
         test_dataset, _ = build_tinyimagenet_dataset(
+            data_root=data_root,
+            transform=test_transform,
+        )
+    elif dataset_name in ["domainnet", "officehome"]:
+        train_transform, test_transform = get_large_image_transforms()
+        train_dataset, num_classes = build_domain_image_dataset(
+            dataset_name,
+            data_root=data_root,
+            transform=train_transform,
+        )
+        test_dataset, _ = build_domain_image_dataset(
+            dataset_name,
             data_root=data_root,
             transform=test_transform,
         )

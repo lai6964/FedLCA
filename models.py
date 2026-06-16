@@ -116,6 +116,8 @@ def get_input_size(dataset_name):
     dataset_name = dataset_name.lower()
     if dataset_name == "tinyimagenet":
         return 64
+    if dataset_name in ["domainnet", "officehome"]:
+        return 224
     return 32
 
 
@@ -123,7 +125,7 @@ def build_model(num_classes=10, model_name="cnn", dataset_name="cifar10"):
     model_name = model_name.lower()
     dataset_name = dataset_name.lower()
     input_size = get_input_size(dataset_name)
-    if dataset_name == "tinyimagenet" and model_name in ["cnn", "fedavgcnn"]:
+    if dataset_name in ["tinyimagenet", "domainnet", "officehome"] and model_name in ["cnn", "fedavgcnn"]:
         return TinyImageNetCNN5(num_classes=num_classes)
 
     if model_name == "cnn":
@@ -137,11 +139,11 @@ def build_model(num_classes=10, model_name="cnn", dataset_name="cifar10"):
 
     model = torchvision.models.resnet18(num_classes=num_classes)
 
-    # 淇敼 ResNet-18 浠ラ€傚簲 CIFAR 杈撳叆
-    model.conv1 = nn.Conv2d(
-        3, 64, kernel_size=3, stride=1, padding=1, bias=False
-    )
-    model.maxpool = nn.Identity()
+    if dataset_name in ["cifar10", "cifar100", "tinyimagenet"]:
+        model.conv1 = nn.Conv2d(
+            3, 64, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        model.maxpool = nn.Identity()
     return model
 
 
