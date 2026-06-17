@@ -37,7 +37,8 @@ def parse_args():
 
 
     parser.add_argument("--init_with_fedavg", type=str_to_bool, default=False)
-    parser.add_argument("--train_fc_first", type=str_to_bool, default=True)
+    parser.add_argument("--mode", type=str, default="personal",
+                        choices=["traditional", "tranditional", "personal"])
     parser.add_argument("--init_checkpoint", type=str, default="")
     parser.add_argument("--save_checkpoint", type=str, default="")
 
@@ -47,6 +48,8 @@ def parse_args():
                             "topk_params",
                             "server_only",
                             "ours",
+                            "only_importance",
+                            "only_consistency",
                             "wo_importance",
                             "wo_consistency",
                             "wo_staleness",
@@ -57,7 +60,6 @@ def parse_args():
     parser.add_argument("--client_frac", type=float, default=0.8)
     parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--train_ratio", type=float, default=0.75)
-    parser.add_argument("--personalized_eval", type=str_to_bool, default=True)
     parser.add_argument("--partition_dir", type=str, default="./data/partitions")
     parser.add_argument("--regenerate_partition", type=str_to_bool, default=False)
 
@@ -87,7 +89,10 @@ def parse_args():
     parser.add_argument("--device_id", type=int, default=0)
     parser.add_argument("--seed", type=int, default=0)
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.mode == "tranditional":
+        args.mode = "traditional"
+    return args
 
 
 class Tee:

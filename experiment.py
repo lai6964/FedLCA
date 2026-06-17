@@ -1,4 +1,4 @@
-﻿import copy
+import copy
 import csv
 import os
 
@@ -110,12 +110,12 @@ def run_experiment(args):
     groups = list(layer_groups.keys())
     trainable_groups = [
         group for group in groups
-        if not (args.train_fc_first and group == "head")
+        if not (args.mode == "personal" and group == "head")
     ]
-    if args.train_fc_first:
+    if args.mode == "personal":
         print(
-            "train_fc_first=True: head stays local and global-model "
-            "evaluation does not measure personalized head accuracy"
+            "mode=personal: head stays local, FC is trained before local "
+            "updates, and personalized evaluation is used"
         )
 
     importance_stats = {g: 1.0 for g in groups}
@@ -166,6 +166,8 @@ def run_experiment(args):
         elif args.method in [
             "ours",
             "server_only",
+            "only_importance",
+            "only_consistency",
             "wo_importance",
             "wo_consistency",
             "wo_staleness",
@@ -180,6 +182,12 @@ def run_experiment(args):
 
             if args.method == "wo_consistency":
                 cons_for_select = {g: 1.0 for g in groups}
+
+            if args.method == "only_importance":
+                cons_for_select = {g: 1.0 for g in groups}
+
+            if args.method == "only_consistency":
+                imp_for_select = {g: 1.0 for g in groups}
 
             if args.method == "wo_staleness":
                 stale_threshold = 10 ** 9
@@ -218,7 +226,7 @@ def run_experiment(args):
             num_samples = len(client_indices[cid])
             client_weights.append(num_samples)
 
-            if args.train_fc_first:
+            if args.mode == "personal":
                 train_local_head(
                     global_params=global_params,
                     model=local_model,
@@ -249,7 +257,7 @@ def run_experiment(args):
                 selected_layers = trainable_groups
 
             elif args.method in ["server_only", "wo_client_adaptive"]:
-                if not args.train_fc_first:
+                if args.mode != "personal":
                     load_param_dict(local_model, global_params)
 
                 # print("computing importance")
@@ -270,7 +278,7 @@ def run_experiment(args):
                 selected_layers = candidate_layers
 
             else:
-                if not args.train_fc_first:
+                if args.mode != "personal":
                     load_param_dict(local_model, global_params)
 
                 # print("computing importance")
@@ -314,7 +322,7 @@ def run_experiment(args):
                 lr=args.lr,
                 momentum=args.momentum,
                 weight_decay=args.weight_decay,
-                preserve_local_groups=["head"] if args.train_fc_first else [],
+                preserve_local_groups=["head"] if args.mode == "personal" else [],
             )
 
             if args.method == "topk_params":
@@ -366,7 +374,7 @@ def run_experiment(args):
                 small_layer_lr=small_layer_lr,
             )
 
-        if args.train_fc_first:
+        if args.mode == "personal":
             head_names = set(layer_groups.get("head", []))
             for client_model in client_models:
                 load_param_dict_excluding(client_model, global_params, head_names)
@@ -394,7 +402,7 @@ def run_experiment(args):
         # ====================================================
         if rnd % args.eval_interval == 0 or rnd == args.rounds:
             # print("begin evaluation at {} round".format(rnd))
-            if args.personalized_eval:
+            if args.mode == "personal":
                 test_sample_counts = [len(indices) for indices in client_test_indices]
                 acc, test_loss = evaluate_personalized(
                     client_models,
