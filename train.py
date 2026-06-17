@@ -77,7 +77,7 @@ def parse_args():
     parser.add_argument("--topk_param_ratio", type=float, default=0.2)
     parser.add_argument("--staleness_threshold", type=int, default=5)
 
-    parser.add_argument("--min_clients_per_layer", type=int, default=2)
+    parser.add_argument("--min_clients_per_layer", type=int, default=5)
     parser.add_argument("--small_layer_lr", type=float, default=0.5)
 
     parser.add_argument("--stat_beta", type=float, default=0.9)
