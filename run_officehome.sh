@@ -1,13 +1,9 @@
 #!/bin/bash
 
-python train.py --device_id 0 --method fedavg --dataset officehome --alpha 0.1 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p1/fedavg
+python train.py --device_id 0 --method sequential_conv --dataset officehome --alpha 0.1 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p1/sequential_conv
 
-python train.py --device_id 0 --method topk_params --dataset officehome --alpha 0.1 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p1/topk_params
+python train.py --device_id 0 --method server_top_importance_conv --dataset officehome --alpha 0.1 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p1/server_top_importance_conv
 
-python train.py --device_id 0 --method ours --dataset officehome --alpha 0.1 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p1/ours
+python train.py --device_id 0 --method sequential_conv --dataset officehome --alpha 0.5 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p5/sequential_conv
 
-python train.py --device_id 0 --method fedavg --dataset officehome --alpha 0.5 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p5/fedavg
-
-python train.py --device_id 0 --method topk_params --dataset officehome --alpha 0.5 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p5/topk_params
-
-python train.py --device_id 0 --method ours --dataset officehome --alpha 0.5 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p5/ours
+python train.py --device_id 0 --method server_top_importance_conv --dataset officehome --alpha 0.5 --data_root ./data --output_dir ./results/officehome_c20_f0p8_resnet18_a0p5/server_top_importance_conv

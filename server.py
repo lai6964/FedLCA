@@ -2,9 +2,61 @@
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
-from models import get_single_group_tensor
+from models import get_single_group_tensor, load_param_dict
 from utils import cosine_similarity, ema_update, flatten_tensors, normalize_dict
+
+
+def server_select_top_importance_conv_layer(
+    model,
+    params,
+    loader,
+    device,
+    layer_groups,
+    candidate_groups,
+):
+    """
+    Select exactly one convolutional group on the server.
+
+    Parameter importance is approximated with one server-side batch:
+    importance(theta_j) = abs(theta_j * grad_j).
+    The layer score is the sum of all parameter importances in that group.
+    """
+    scores = {group: 0.0 for group in candidate_groups}
+    if len(candidate_groups) == 0:
+        return [], scores
+
+    load_param_dict(model, params)
+    model.to(device)
+    model.train()
+    model.zero_grad(set_to_none=True)
+
+    try:
+        x, y = next(iter(loader))
+    except StopIteration:
+        selected = candidate_groups[0]
+        return [selected], scores
+
+    x, y = x.to(device), y.to(device)
+    loss = F.cross_entropy(model(x), y)
+    loss.backward()
+
+    named_params = dict(model.named_parameters())
+    for group in candidate_groups:
+        score = 0.0
+        for name in layer_groups.get(group, []):
+            param = named_params.get(name)
+            if param is None or param.grad is None:
+                continue
+            importance = torch.abs(param.detach() * param.grad.detach())
+            score += float(importance.sum().detach().cpu())
+        scores[group] = score
+
+    model.zero_grad(set_to_none=True)
+    selected = max(candidate_groups, key=lambda group: scores.get(group, 0.0))
+    return [selected], scores
+
 
 def server_select_candidate_layers(
     layer_groups,

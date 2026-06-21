@@ -46,6 +46,8 @@ def parse_args():
                         choices=[
                             "fedavg",
                             "topk_params",
+                            "sequential_conv",
+                            "server_top_importance_conv",
                             "server_only",
                             "ours",
                             "only_importance",

@@ -29,6 +29,7 @@ from server import (
     aggregate_layer_updates,
     aggregate_topk_param_values,
     server_select_candidate_layers,
+    server_select_top_importance_conv_layer,
     update_server_statistics,
 )
 from utils import get_device, set_seed
@@ -69,6 +70,13 @@ def run_experiment(args):
         num_workers=args.num_workers,
         shuffle=False,
     )
+    all_train_indices = [idx for indices in client_indices for idx in indices]
+    server_loader = build_client_loaders(
+        train_set,
+        [all_train_indices],
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+    )[0]
 
     model_fn = lambda: build_model(
         num_classes=num_classes,
@@ -112,6 +120,14 @@ def run_experiment(args):
         group for group in groups
         if not (args.mode == "personal" and group == "head")
     ]
+    sequential_conv_groups = [
+        group for group in ["stem", "layer1", "layer2", "layer3", "layer4"]
+        if group in trainable_groups
+    ]
+    if len(sequential_conv_groups) == 0:
+        sequential_conv_groups = [
+            group for group in trainable_groups if group != "head"
+        ]
     if args.mode == "personal":
         print(
             "mode=personal: head stays local, FC is trained before local "
@@ -149,7 +165,12 @@ def run_experiment(args):
         ).tolist()
 
         old_global_params = None
-        if args.method not in ["fedavg", "topk_params"]:
+        if args.method not in [
+            "fedavg",
+            "topk_params",
+            "sequential_conv",
+            "server_top_importance_conv",
+        ]:
             old_global_params = copy.deepcopy(global_params)
 
         # ====================================================
@@ -162,6 +183,23 @@ def run_experiment(args):
         elif args.method == "topk_params":
             candidate_layers = trainable_groups
             global_scores = {g: 1.0 for g in trainable_groups}
+
+        elif args.method == "sequential_conv":
+            selected_group = sequential_conv_groups[
+                (rnd - 1) % len(sequential_conv_groups)
+            ]
+            candidate_layers = [selected_group]
+            global_scores = {selected_group: 1.0}
+
+        elif args.method == "server_top_importance_conv":
+            candidate_layers, global_scores = server_select_top_importance_conv_layer(
+                model=model_fn(),
+                params=global_params,
+                loader=server_loader,
+                device=device,
+                layer_groups=layer_groups,
+                candidate_groups=sequential_conv_groups,
+            )
 
         elif args.method in [
             "ours",
@@ -242,6 +280,8 @@ def run_experiment(args):
             # 瀹㈡埛绔帴鏀舵ā鍨?
             if args.method in ["fedavg", "topk_params"]:
                 downloaded = total_params
+            elif args.method in ["sequential_conv", "server_top_importance_conv"]:
+                downloaded = sum(group_param_counts[g] for g in candidate_layers)
             else:
                 downloaded = sum(group_param_counts[g] for g in candidate_layers)
             round_download_params += downloaded
@@ -255,6 +295,11 @@ def run_experiment(args):
                 local_importance = {}
                 local_consistency = {}
                 selected_layers = trainable_groups
+
+            elif args.method in ["sequential_conv", "server_top_importance_conv"]:
+                local_importance = {}
+                local_consistency = {}
+                selected_layers = candidate_layers
 
             elif args.method in ["server_only", "wo_client_adaptive"]:
                 if args.mode != "personal":
@@ -385,7 +430,12 @@ def run_experiment(args):
         # ====================================================
         # 鏇存柊鏈嶅姟鍣ㄥ眰绾х粺璁￠噺
         # ====================================================
-        if args.method not in ["fedavg", "topk_params"]:
+        if args.method not in [
+            "fedavg",
+            "topk_params",
+            "sequential_conv",
+            "server_top_importance_conv",
+        ]:
             importance_stats, consistency_stats = update_server_statistics(
                 old_global=old_global_params,
                 new_global=global_params,

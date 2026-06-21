@@ -158,6 +158,14 @@ def get_layer_groups(model):
     for name in model.state_dict().keys():
         if name.startswith("conv1") or name.startswith("bn1"):
             groups["stem"].append(name)
+        elif name.startswith("conv2"):
+            groups["layer1"].append(name)
+        elif name.startswith("conv3"):
+            groups["layer2"].append(name)
+        elif name.startswith("conv4"):
+            groups["layer3"].append(name)
+        elif name.startswith("conv5"):
+            groups["layer4"].append(name)
         elif name.startswith("layer1"):
             groups["layer1"].append(name)
         elif name.startswith("layer2"):
