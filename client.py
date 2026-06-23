@@ -153,26 +153,55 @@ def build_topk_param_upload(
     layer_groups,
     candidate_layers,
     topk_ratio=0.2,
+    dense_layers=None,
 ):
+    dense_layers = dense_layers or []
+    all_param_names = {name for name, _ in model.named_parameters()}
+    dense_names = {
+        name
+        for group in dense_layers
+        for name in layer_groups.get(group, [])
+    }
+    for group in candidate_layers:
+        for name in layer_groups.get(group, []):
+            if name not in all_param_names and name in global_params:
+                if torch.is_floating_point(global_params[name]):
+                    dense_names.add(name)
+
     selected_names = {
         name
         for group in candidate_layers
         for name in layer_groups.get(group, [])
+        if name not in dense_names
     }
     named_params = {
         name: param
         for name, param in model.named_parameters()
         if name in selected_names and param.requires_grad
     }
+
+    new_params = get_param_dict(model)
+    upload = {}
+    dense_upload_params = 0
+    for name in dense_names:
+        if name not in new_params or name not in global_params:
+            continue
+        if not torch.is_floating_point(new_params[name]):
+            continue
+        upload[name] = {
+            "full_update": new_params[name] - global_params[name],
+        }
+        dense_upload_params += new_params[name].numel()
+
     if not named_params:
-        return {}, 0
+        return upload, dense_upload_params
 
     model.train()
     model.zero_grad()
     try:
         x, y = next(iter(loader))
     except StopIteration:
-        return {}, 0
+        return upload, dense_upload_params
 
     x, y = x.to(device), y.to(device)
     loss = F.cross_entropy(model(x), y)
@@ -188,14 +217,13 @@ def build_topk_param_upload(
 
     if not importance_parts:
         model.zero_grad()
-        return {}, 0
+        return upload, dense_upload_params
 
     flat_importance = torch.cat(importance_parts)
     total = flat_importance.numel()
     k = min(total, max(1, int(total * topk_ratio)))
     topk_indices = torch.topk(flat_importance, k=k, largest=True).indices
 
-    upload = {}
     offset = 0
     topk_indices = topk_indices.sort().values
     for name, scores in zip(names, importance_parts):
@@ -214,7 +242,7 @@ def build_topk_param_upload(
         offset = next_offset
 
     model.zero_grad()
-    return upload, k
+    return upload, dense_upload_params + k
 
 
 def estimate_local_consistency(

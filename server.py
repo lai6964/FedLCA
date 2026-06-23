@@ -164,11 +164,22 @@ def aggregate_topk_param_updates(global_params, client_uploads, client_weights):
     new_global = copy.deepcopy(global_params)
     sums = {}
     weights = {}
+    dense_sums = {}
+    dense_weights = {}
 
     for client_idx, upload in enumerate(client_uploads):
         for name, payload in upload.items():
             if name not in new_global or not torch.is_floating_point(new_global[name]):
                 continue
+            client_weight = float(client_weights[client_idx])
+            if "full_update" in payload:
+                if name not in dense_sums:
+                    dense_sums[name] = torch.zeros_like(new_global[name])
+                    dense_weights[name] = 0.0
+                dense_sums[name] += payload["full_update"].to(dense_sums[name].dtype) * client_weight
+                dense_weights[name] += client_weight
+                continue
+
             if name not in sums:
                 sums[name] = torch.zeros_like(new_global[name]).reshape(-1)
                 weights[name] = torch.zeros(
@@ -178,11 +189,14 @@ def aggregate_topk_param_updates(global_params, client_uploads, client_weights):
 
             indices = payload["indices"].to(torch.long)
             updates = payload["updates"].to(sums[name].dtype)
-            client_weight = float(client_weights[client_idx])
             sums[name][indices] += updates * client_weight
             weights[name][indices] += client_weight
 
     layer_client_count = {}
+    for name, update_sum in dense_sums.items():
+        if dense_weights[name] > 0:
+            new_global[name] = new_global[name] + update_sum / dense_weights[name]
+
     for name, flat_sum in sums.items():
         weight = weights[name]
         updated = weight > 0

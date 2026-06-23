@@ -109,29 +109,62 @@ def run_experiment(args):
         args.num_clients,
         mode=args.resource_mode,
     )
-    resources = calibrate_resource_budget(
-        resources,
-        group_param_counts,
-        layer_budget=args.client_layer_budget,
-    )
 
     groups = list(layer_groups.keys())
     trainable_groups = [
         group for group in groups
         if not (args.mode == "personal" and group == "head")
     ]
+    always_sync_groups = []
+    if args.mode == "traditional" and "head" in trainable_groups:
+        always_sync_groups = ["head"]
+    selectable_groups = [
+        group for group in trainable_groups
+        if group not in always_sync_groups
+    ]
+    selectable_group_param_counts = {
+        group: group_param_counts[group] for group in selectable_groups
+    }
+    if len(selectable_group_param_counts) == 0:
+        selectable_group_param_counts = {
+            group: group_param_counts[group] for group in trainable_groups
+        }
+    resources = calibrate_resource_budget(
+        resources,
+        selectable_group_param_counts,
+        layer_budget=args.client_layer_budget,
+    )
+
+    def add_always_sync_groups(selected_groups):
+        merged = list(selected_groups)
+        for group in always_sync_groups:
+            if group not in merged:
+                merged.append(group)
+        return merged
+
+    def count_selected_layers(selected_groups):
+        return len([
+            group for group in selected_groups
+            if group not in always_sync_groups
+        ])
+
     sequential_conv_groups = [
         group for group in ["stem", "layer1", "layer2", "layer3", "layer4"]
-        if group in trainable_groups
+        if group in selectable_groups
     ]
     if len(sequential_conv_groups) == 0:
         sequential_conv_groups = [
-            group for group in trainable_groups if group != "head"
+            group for group in selectable_groups if group != "head"
         ]
     if args.mode == "personal":
         print(
             "mode=personal: head stays local, FC is trained before local "
             "updates, and personalized evaluation is used"
+        )
+    elif always_sync_groups:
+        print(
+            "mode=traditional: head is synchronized every round for sparse "
+            "layer-selection methods"
         )
 
     importance_stats = {g: 1.0 for g in groups}
@@ -232,7 +265,7 @@ def run_experiment(args):
 
             candidate_layers, global_scores = server_select_candidate_layers(
                 layer_groups={
-                    group: layer_groups[group] for group in trainable_groups
+                    group: layer_groups[group] for group in selectable_groups
                 },
                 importance_stats=imp_for_select,
                 consistency_stats=cons_for_select,
@@ -281,9 +314,11 @@ def run_experiment(args):
             if args.method in ["fedavg", "topk_params"]:
                 downloaded = total_params
             elif args.method in ["sequential_conv", "server_top_importance_conv"]:
-                downloaded = sum(group_param_counts[g] for g in candidate_layers)
+                download_layers = add_always_sync_groups(candidate_layers)
+                downloaded = sum(group_param_counts[g] for g in download_layers)
             else:
-                downloaded = sum(group_param_counts[g] for g in candidate_layers)
+                download_layers = add_always_sync_groups(candidate_layers)
+                downloaded = sum(group_param_counts[g] for g in download_layers)
             round_download_params += downloaded
 
             if args.method == "fedavg":
@@ -299,7 +334,7 @@ def run_experiment(args):
             elif args.method in ["sequential_conv", "server_top_importance_conv"]:
                 local_importance = {}
                 local_consistency = {}
-                selected_layers = candidate_layers
+                selected_layers = add_always_sync_groups(candidate_layers)
 
             elif args.method in ["server_only", "wo_client_adaptive"]:
                 if args.mode != "personal":
@@ -321,6 +356,7 @@ def run_experiment(args):
                 )
 
                 selected_layers = candidate_layers
+                selected_layers = add_always_sync_groups(selected_layers)
 
             else:
                 if args.mode != "personal":
@@ -354,6 +390,7 @@ def run_experiment(args):
                     bandwidth=res["bandwidth"],
                     min_layers=1,
                 )
+                selected_layers = add_always_sync_groups(selected_layers)
 
             # print("training local model")
             updates, train_loss = train_local(
@@ -379,6 +416,7 @@ def run_experiment(args):
                     layer_groups=layer_groups,
                     candidate_layers=trainable_groups,
                     topk_ratio=args.topk_param_ratio,
+                    dense_layers=["head"] if "head" in trainable_groups else [],
                 )
             else:
                 upload_params = sum(
@@ -389,7 +427,7 @@ def run_experiment(args):
 
             round_upload_params += upload_params
             round_compute_params += compute_params
-            selected_layer_nums.append(len(selected_layers))
+            selected_layer_nums.append(count_selected_layers(selected_layers))
 
             client_updates.append(updates)
             importance_uploads.append(local_importance)
