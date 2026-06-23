@@ -146,6 +146,7 @@ def train_local_head(
 
 
 def build_topk_param_upload(
+    global_params,
     model,
     loader,
     device,
@@ -199,13 +200,15 @@ def build_topk_param_upload(
     topk_indices = topk_indices.sort().values
     for name, scores in zip(names, importance_parts):
         param = named_params[name].detach().cpu().reshape(-1)
+        base_param = global_params[name].reshape(-1)
+        delta = param - base_param
         next_offset = offset + scores.numel()
         mask = (topk_indices >= offset) & (topk_indices < next_offset)
         local_indices = topk_indices[mask] - offset
         if local_indices.numel() > 0:
             upload[name] = {
                 "indices": local_indices.to(torch.long),
-                "values": param[local_indices].clone(),
+                "updates": delta[local_indices].clone(),
                 "shape": tuple(named_params[name].shape),
             }
         offset = next_offset

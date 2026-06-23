@@ -21,7 +21,8 @@ def server_select_top_importance_conv_layer(
 
     Parameter importance is approximated with one server-side batch:
     importance(theta_j) = abs(theta_j * grad_j).
-    The layer score is the sum of all parameter importances in that group.
+    The layer score is the mean parameter importance in that group, which
+    avoids always favoring deeper layers only because they have more weights.
     """
     scores = {group: 0.0 for group in candidate_groups}
     if len(candidate_groups) == 0:
@@ -44,14 +45,16 @@ def server_select_top_importance_conv_layer(
 
     named_params = dict(model.named_parameters())
     for group in candidate_groups:
-        score = 0.0
+        total_importance = 0.0
+        total_params = 0
         for name in layer_groups.get(group, []):
             param = named_params.get(name)
             if param is None or param.grad is None:
                 continue
             importance = torch.abs(param.detach() * param.grad.detach())
-            score += float(importance.sum().detach().cpu())
-        scores[group] = score
+            total_importance += float(importance.sum().detach().cpu())
+            total_params += importance.numel()
+        scores[group] = total_importance / max(total_params, 1)
 
     model.zero_grad(set_to_none=True)
     selected = max(candidate_groups, key=lambda group: scores.get(group, 0.0))
@@ -157,34 +160,35 @@ def aggregate_layer_updates(
     return new_global, layer_client_count
 
 
-def aggregate_topk_param_values(global_params, client_uploads):
+def aggregate_topk_param_updates(global_params, client_uploads, client_weights):
     new_global = copy.deepcopy(global_params)
     sums = {}
-    counts = {}
+    weights = {}
 
-    for upload in client_uploads:
+    for client_idx, upload in enumerate(client_uploads):
         for name, payload in upload.items():
             if name not in new_global or not torch.is_floating_point(new_global[name]):
                 continue
             if name not in sums:
                 sums[name] = torch.zeros_like(new_global[name]).reshape(-1)
-                counts[name] = torch.zeros(
+                weights[name] = torch.zeros(
                     new_global[name].numel(),
                     dtype=torch.float32,
                 )
 
             indices = payload["indices"].to(torch.long)
-            values = payload["values"].to(sums[name].dtype)
-            sums[name][indices] += values
-            counts[name][indices] += 1.0
+            updates = payload["updates"].to(sums[name].dtype)
+            client_weight = float(client_weights[client_idx])
+            sums[name][indices] += updates * client_weight
+            weights[name][indices] += client_weight
 
     layer_client_count = {}
     for name, flat_sum in sums.items():
-        count = counts[name]
-        updated = count > 0
+        weight = weights[name]
+        updated = weight > 0
         if updated.any():
             flat_global = new_global[name].reshape(-1)
-            flat_global[updated] = flat_sum[updated] / count[updated]
+            flat_global[updated] = flat_global[updated] + flat_sum[updated] / weight[updated]
             new_global[name] = flat_global.reshape_as(new_global[name])
 
     return new_global, layer_client_count

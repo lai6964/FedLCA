@@ -21,7 +21,7 @@ def str_to_bool(value):
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("--dataset", type=str, default="officehome",
+    parser.add_argument("--dataset", type=str, default="cifar100",
                         choices=[
                             "cifar10",
                             "cifar100",

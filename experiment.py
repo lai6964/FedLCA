@@ -27,7 +27,7 @@ from models import (
 from resources import calibrate_resource_budget, generate_client_resources
 from server import (
     aggregate_layer_updates,
-    aggregate_topk_param_values,
+    aggregate_topk_param_updates,
     server_select_candidate_layers,
     server_select_top_importance_conv_layer,
     update_server_statistics,
@@ -372,6 +372,7 @@ def run_experiment(args):
 
             if args.method == "topk_params":
                 updates, upload_params = build_topk_param_upload(
+                    global_params=global_params,
                     model=local_model,
                     loader=loader,
                     device=device,
@@ -398,9 +399,10 @@ def run_experiment(args):
         # 鏈嶅姟鍣ㄥ垎灞傝仛鍚?
         # ====================================================
         if args.method == "topk_params":
-            global_params, layer_client_count = aggregate_topk_param_values(
+            global_params, layer_client_count = aggregate_topk_param_updates(
                 global_params=global_params,
                 client_uploads=client_updates,
+                client_weights=client_weights,
             )
         else:
             if args.method == "fedavg":
