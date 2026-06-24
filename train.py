@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--weight_decay", type=float, default=5e-4)
 
-    parser.add_argument("--server_layer_budget", type=int, default=4)
+    parser.add_argument("--server_layer_budget", type=int, default=3)
     parser.add_argument("--client_layer_budget", type=int, default=2)
     parser.add_argument("--topk_param_ratio", type=float, default=0.2)
     parser.add_argument("--staleness_threshold", type=int, default=5)

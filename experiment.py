@@ -34,6 +34,17 @@ from server import (
 )
 from utils import get_device, set_seed
 
+
+def count_layer_update_clients(client_updates, layer_groups):
+    layer_counts = {group: 0 for group in layer_groups}
+    for updates in client_updates:
+        updated_names = set(updates.keys())
+        for group, names in layer_groups.items():
+            if any(name in updated_names for name in names):
+                layer_counts[group] += 1
+    return layer_counts
+
+
 def run_experiment(args):
     set_seed(args.seed)
     device = get_device(args.device_id)
@@ -173,6 +184,11 @@ def run_experiment(args):
 
     os.makedirs(args.output_dir, exist_ok=True)
     log_path = os.path.join(args.output_dir, f"{args.method}_{args.dataset}_a{args.alpha}.csv")
+    layer_count_log_path = os.path.join(
+        args.output_dir,
+        f"{args.method}_{args.dataset}_a{args.alpha}_layer_counts.csv",
+    )
+    layer_count_columns = [f"{group}_update_clients" for group in groups]
 
     with open(log_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -186,6 +202,16 @@ def run_experiment(args):
             "compute_params",
             "candidate_layers",
             "avg_selected_layers",
+            *layer_count_columns,
+        ])
+
+    with open(layer_count_log_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "round",
+            "candidate_layers",
+            "selected_clients",
+            *layer_count_columns,
         ])
 
     total_params = sum(group_param_counts[group] for group in trainable_groups)
@@ -433,6 +459,11 @@ def run_experiment(args):
             importance_uploads.append(local_importance)
             train_losses.append(train_loss)
 
+        round_layer_counts = count_layer_update_clients(
+            client_updates,
+            layer_groups,
+        )
+
         # ====================================================
         # 鏈嶅姟鍣ㄥ垎灞傝仛鍚?
         # ====================================================
@@ -458,6 +489,29 @@ def run_experiment(args):
                 min_clients_per_layer=min_clients_per_layer,
                 small_layer_lr=small_layer_lr,
             )
+
+        if args.method in [
+            "ours",
+            "server_only",
+            "only_importance",
+            "only_consistency",
+            "wo_importance",
+            "wo_consistency",
+            "wo_staleness",
+            "wo_client_adaptive",
+        ]:
+            for group in selectable_groups:
+                if round_layer_counts.get(group, 0) > 0:
+                    last_selected_round[group] = rnd
+
+        with open(layer_count_log_path, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                rnd,
+                "|".join(candidate_layers),
+                "|".join(str(cid) for cid in selected_clients),
+                *[round_layer_counts[group] for group in groups],
+            ])
 
         if args.mode == "personal":
             head_names = set(layer_groups.get("head", []))
@@ -524,6 +578,9 @@ def run_experiment(args):
 
             avg_train_loss = float(np.mean(train_losses))
             avg_selected_layers = float(np.mean(selected_layer_nums))
+            layer_count_text = ",".join(
+                f"{group}:{round_layer_counts[group]}" for group in groups
+            )
 
             print(
                 f"[Round {rnd:03d}] "
@@ -534,7 +591,8 @@ def run_experiment(args):
                 f"Download={round_download_params / 1e6:.2f}M | "
                 f"Compute={round_compute_params / 1e6:.2f}M | "
                 f"Candidate={candidate_layers} | "
-                f"AvgLayers={avg_selected_layers:.2f}"
+                f"AvgLayers={avg_selected_layers:.2f} | "
+                f"LayerCounts={{{layer_count_text}}}"
             )
 
             with open(log_path, "a", newline="") as f:
@@ -549,9 +607,11 @@ def run_experiment(args):
                     round_compute_params,
                     "|".join(candidate_layers),
                     avg_selected_layers,
+                    *[round_layer_counts[group] for group in groups],
                 ])
 
     print(f"Results saved to: {log_path}")
+    print(f"Layer counts saved to: {layer_count_log_path}")
 
     if args.save_checkpoint:
         checkpoint_dir = os.path.dirname(args.save_checkpoint)

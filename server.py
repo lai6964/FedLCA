@@ -100,9 +100,6 @@ def server_select_candidate_layers(
         remaining = sorted(remaining, key=lambda x: scores[x], reverse=True)
         selected += remaining[: layer_budget - len(selected)]
 
-    for g in selected:
-        last_selected_round[g] = current_round
-
     return selected, scores
 
 
@@ -113,14 +110,19 @@ def aggregate_layer_updates(
     layer_groups,
     min_clients_per_layer=1,
     small_layer_lr=0.5,
+    normalize_by_all_clients=True,
 ):
     """
     鍒嗗眰鑱氬悎銆?
     姣忓眰鍙仛鍚堝疄闄呬笂浼犺灞傛洿鏂扮殑瀹㈡埛绔€?
     濡傛灉鏌愬眰鍙備笌瀹㈡埛绔繃灏戯紝鍙互闄嶄綆鑱氬悎姝ラ暱銆?
+    Missing layer updates are treated as zero updates by default, so a small
+    subset of non-IID clients cannot dominate the global update for that layer.
     """
     new_global = copy.deepcopy(global_params)
     layer_client_count = {}
+
+    round_total_weight = sum(client_weights)
 
     for g, names in layer_groups.items():
         available_clients = []
@@ -134,7 +136,10 @@ def aggregate_layer_updates(
         if len(available_clients) == 0:
             continue
 
-        total_weight = sum(client_weights[i] for i in available_clients)
+        if normalize_by_all_clients:
+            total_weight = round_total_weight
+        else:
+            total_weight = sum(client_weights[i] for i in available_clients)
         if total_weight <= 0:
             continue
 
