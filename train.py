@@ -60,7 +60,7 @@ def parse_args():
 
     parser.add_argument("--num_clients", type=int, default=20)
     parser.add_argument("--client_frac", type=float, default=0.8)
-    parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument("--alpha", type=float, default=0.1)
     parser.add_argument("--train_ratio", type=float, default=0.75)
     parser.add_argument("--partition_dir", type=str, default="./data/partitions")
     parser.add_argument("--regenerate_partition", type=str_to_bool, default=False)

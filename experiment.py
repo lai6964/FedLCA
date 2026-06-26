@@ -45,6 +45,15 @@ def count_layer_update_clients(client_updates, layer_groups):
     return layer_counts
 
 
+def get_stale_layers(groups, last_selected_round, current_round, staleness_threshold):
+    if staleness_threshold <= 0:
+        return list(groups)
+    return [
+        group for group in groups
+        if current_round - last_selected_round.get(group, -1) >= staleness_threshold
+    ]
+
+
 def run_experiment(args):
     set_seed(args.seed)
     device = get_device(args.device_id)
@@ -153,6 +162,13 @@ def run_experiment(args):
                 merged.append(group)
         return merged
 
+    def add_forced_groups(selected_groups, forced_groups):
+        merged = list(selected_groups)
+        for group in forced_groups:
+            if group not in merged:
+                merged.append(group)
+        return merged
+
     def count_selected_layers(selected_groups):
         return len([
             group for group in selected_groups
@@ -231,6 +247,7 @@ def run_experiment(args):
             "server_top_importance_conv",
         ]:
             old_global_params = copy.deepcopy(global_params)
+        forced_layers = []
 
         # ====================================================
         # 鏈嶅姟鍣ㄥ€欓€夊眰閫夋嫨
@@ -258,6 +275,9 @@ def run_experiment(args):
                 device=device,
                 layer_groups=layer_groups,
                 candidate_groups=sequential_conv_groups,
+                last_selected_round=last_selected_round,
+                current_round=rnd,
+                staleness_threshold=args.staleness_threshold,
             )
 
         elif args.method in [
@@ -273,7 +293,6 @@ def run_experiment(args):
             imp_for_select = copy.deepcopy(importance_stats)
             cons_for_select = copy.deepcopy(consistency_stats)
             stale_threshold = args.staleness_threshold
-
             if args.method == "wo_importance":
                 imp_for_select = {g: 1.0 for g in groups}
 
@@ -288,6 +307,13 @@ def run_experiment(args):
 
             if args.method == "wo_staleness":
                 stale_threshold = 10 ** 9
+
+            forced_layers = get_stale_layers(
+                selectable_groups,
+                last_selected_round,
+                rnd,
+                stale_threshold,
+            )
 
             candidate_layers, global_scores = server_select_candidate_layers(
                 layer_groups={
@@ -418,6 +444,9 @@ def run_experiment(args):
                 )
                 selected_layers = add_always_sync_groups(selected_layers)
 
+            selected_layers = add_forced_groups(selected_layers, forced_layers)
+            selected_layers = add_always_sync_groups(selected_layers)
+
             # print("training local model")
             updates, train_loss = train_local(
                 global_params=global_params,
@@ -499,6 +528,7 @@ def run_experiment(args):
             "wo_consistency",
             "wo_staleness",
             "wo_client_adaptive",
+            "server_top_importance_conv",
         ]:
             for group in selectable_groups:
                 if round_layer_counts.get(group, 0) > 0:

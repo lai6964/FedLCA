@@ -15,14 +15,19 @@ def server_select_top_importance_conv_layer(
     device,
     layer_groups,
     candidate_groups,
+    last_selected_round=None,
+    current_round=None,
+    staleness_threshold=5,
+    cooldown_rounds=1,
 ):
     """
     Select exactly one convolutional group on the server.
 
     Parameter importance is approximated with one server-side batch:
     importance(theta_j) = abs(theta_j * grad_j).
-    The layer score is the mean parameter importance in that group, which
-    avoids always favoring deeper layers only because they have more weights.
+    The layer score is the mean parameter importance in that group. Selection
+    also uses staleness and a short cooldown so this baseline does not collapse
+    into repeatedly exchanging the same high-gradient early layer.
     """
     scores = {group: 0.0 for group in candidate_groups}
     if len(candidate_groups) == 0:
@@ -57,8 +62,37 @@ def server_select_top_importance_conv_layer(
         scores[group] = total_importance / max(total_params, 1)
 
     model.zero_grad(set_to_none=True)
-    selected = max(candidate_groups, key=lambda group: scores.get(group, 0.0))
-    return [selected], scores
+    normalized_scores = normalize_dict(scores)
+    adjusted_scores = copy.deepcopy(normalized_scores)
+    eligible_groups = list(candidate_groups)
+
+    if last_selected_round is not None and current_round is not None:
+        stale_groups = []
+        cooldown_groups = []
+        threshold = max(staleness_threshold, 1)
+
+        for group in candidate_groups:
+            stale = current_round - last_selected_round.get(group, -1)
+            adjusted_scores[group] = (
+                normalized_scores[group] + min(stale / threshold, 1.0)
+            )
+            if stale >= threshold:
+                stale_groups.append(group)
+            if stale <= cooldown_rounds:
+                cooldown_groups.append(group)
+
+        if stale_groups:
+            eligible_groups = stale_groups
+        else:
+            non_cooldown_groups = [
+                group for group in candidate_groups
+                if group not in cooldown_groups
+            ]
+            if non_cooldown_groups:
+                eligible_groups = non_cooldown_groups
+
+    selected = max(eligible_groups, key=lambda group: adjusted_scores.get(group, 0.0))
+    return [selected], adjusted_scores
 
 
 def server_select_candidate_layers(
@@ -93,7 +127,7 @@ def server_select_candidate_layers(
             stale_layers.append(g)
 
     stale_layers = sorted(stale_layers, key=lambda x: scores[x], reverse=True)
-    selected = stale_layers[:layer_budget]
+    selected = list(stale_layers)
 
     if len(selected) < layer_budget:
         remaining = [g for g in groups if g not in selected]
